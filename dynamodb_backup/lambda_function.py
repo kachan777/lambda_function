@@ -6,30 +6,74 @@ class Backup:
 
     def __init__(self):
         # dynamodbに接続
-        self.dynamodb = boto3.resource('dynamodb')
-        self.client = boto3.client('dynamodb')
+        #self.dynamodb = boto3.resource('dynamodb')
+        #self.client = boto3.client('dynamodb')
+        pass
 
-    def table_scan(self, table_name):
-        table = self.dynamodb.Table(table_name)
-        try:
-            res = table.scan()
-            return res
-        except Exception as e:
-            return e
+    def create_target_list(self):
 
-    def backup_exe(self, name, today):
-        print(name)
-        res = self.client.create_backup(
-            TableName = name,
-            BackupName = name + '.' + today
-        )
+        # リスト保存先のS3バケット
+        bucket = 'dynamodb-test'
+
+        # バックアップ対象のリスト名
+        target_list = 'dynamodb_backup_target.list'
+
+        # s3へ接続
+        s3 = boto3.resource('s3')
+
+        # s3にあるバックアップリストを/tmpヘコピー
+        s3.Bucket(bucket).download_file(target_list, '/tmp/dynamodb_backup_target.list')
+
+        target_list = []
+
+        with open('/tmp/dynamodb_backup_target.list', 'rt') as f:
+            for line in f:
+                target_list.append(line)
+                print(line)
+
+        return target_list
+
+    def backup_exe(self, target_list, today):
+
+        # dynamodbに接続
+        client = boto3.client('dynamodb')
+
+        for name in target_list:
+            name = name.replace('\n','')
+            res = client.create_backup(
+                TableName = name,
+                BackupName = name + '.' + today
+            )
         return res
 
-    def check(self):
-        pass
+    def lotate(self, target_list, today):
 
-    def lotate(self):
-        pass
+        # dynamodbに接続
+        client = boto3.client('dynamodb')
+
+        # バックアップ情報取得メソッドの引数を作成
+        year = str(today[0:4])
+        month = str(today[4:6])
+        day = str(today[6:8])
+        mod_today = year + ',' + month + ',' + day
+        print(mod_today)
+
+        for name in target_list:
+            name = name.replace('\n','')
+            res = client.list_backups(
+                TableName = name,
+                #TimeRangeLowerBound = datetime.datetime(year + ',' + month + ',' + day)
+                TimeRangeLowerBound = datetime.datetime(2017, 12, 26)
+            )
+        print(res)
+'''
+        if res in 'CREATING':
+            print('Backup job is still in progress...')
+        else:
+            response = client.delete_backup(
+                BackupArn = res[]
+            )
+'''
 
 def lambda_handler(event, context):
 
@@ -37,16 +81,17 @@ def lambda_handler(event, context):
     now = datetime.datetime.now()
     today = now.strftime("%Y%m%d")
 
-    # バックアップ対象のリストが定義されているdynamodb table
-    backup_list = 'backup_status'
-
     print('Loading function')
 
     # バックアップインスタンス作成
     backup = Backup()
 
-    # バックアップリスト読み出し & バックアップ実行
-    for keys in backup.table_scan(backup_list)['Items']:
-        print(keys['name'])
-        backup.backup_exe(keys['name'], today)
+    # バックアップのターゲットリスト読み出し
+    target_list = backup.create_target_list()
+
+    # バックアップ実行
+    backup.backup_exe(target_list, today)
+
+    # バックアップ完了のチェック & 古いバックアップの削除
+    backup.lotate(target_list, today)
 
